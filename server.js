@@ -153,29 +153,29 @@ app.post('/generate-tips', async (req, res) => {
 		const hasAge = checkForAgeReference(userPrompt);
 
 		// If no age is mentioned, ask for clarification
-		if (!hasAge) {
-			return res.status(400).json({
-				error: 'age_required',
-				message:
-					"Please specify your child's age to receive more relevant tips.",
-			});
-		}
+		// if (!hasAge) {
+		// 	return res.status(400).json({
+		// 		error: 'age_required',
+		// 		message:
+		// 			"Please specify your child's age to receive more relevant tips.",
+		// 	});
+		// }
 
 		// Detect language of the prompt
 		const language = await detectLanguage(userPrompt);
-
+		console.log('Detected language:', language);
 		// Try to extract child interests
-		const childInterest = extractChildInterests(userPrompt);
+		// const childInterest = extractChildInterests(userPrompt);
 
 		// Add identified interest to the user prompt if found
 		let enhancedPrompt = userPrompt;
-		if (childInterest) {
-			enhancedPrompt += `\n\nPlease incorporate my child's interest in ${childInterest} into your tips.`;
-		}
+		// if (childInterest) {
+		// 	enhancedPrompt += `\n\nPlease incorporate my child's interest in ${childInterest} into your tips.`;
+		// }
 
 		// Generate tips using GPT-4o or GPT-4 depending on availability
 		const completion = await openai.chat.completions.create({
-			model: 'gpt-4', // Use GPT-4 as in the original code
+			model: 'gpt-4o', // Use GPT-4 as in the original code
 			messages: [
 				{ role: 'system', content: systemPrompt },
 				{ role: 'user', content: enhancedPrompt },
@@ -244,7 +244,7 @@ Replace [TOPIC] with: ${userPrompt}`,
 			tips: tips,
 			commonQuestions: commonQuestions,
 			detectedLanguage: language,
-			childInterests: childInterest || undefined,
+			// childInterests: childInterest || undefined,
 		});
 	} catch (error) {
 		console.error('Error:', error);
