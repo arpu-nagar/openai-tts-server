@@ -14,7 +14,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 // Enhanced system prompt with new features
 const systemPrompt = `You are EFECT (Empowering Family Engagement and Communication with Technology), an AI assistant designed to provide strategies for parents to enhance language development in young children through rich parent-child interactions. Your responses should be warm, encouraging, and sound like a knowledgeable, supportive parenting coach.
 
-Provide exactly 3 tips in your response. Each tip should have:
+Provide exactly 1 tip in your response. Each tip should have:
 1. A title in the format "Tip X for [query]"
 2. A body with a brief, actionable strategy
 3. Details expanding on the strategy
@@ -41,12 +41,19 @@ function checkForAgeReference(prompt) {
 
 // Enhanced tip parser to handle multilingual content
 function parseTips(tipsText) {
-	// This regex pattern is language-agnostic to work with non-English responses
-	const tipRegex = /Tip (\d+) for (.+?):\s*([\s\S]*?)(?=(?:\nTip \d+|$))/g;
+	// First try to parse using the standard format
+	const standardTipRegex =
+		/Tip (\d+) for (.+?):\s*([\s\S]*?)(?=(?:\nTip \d+|$))/g;
+
+	// Hindi/multilingual format with **युक्ति X:** or similar patterns
+	const multilingualTipRegex =
+		/\*\*(युक्ति|टिप|सुझाव|Tip)\s*(\d+)[:\s]([^*]+)\*\*([\s\S]*?)(?=(?:\n\*\*|$))/g;
+
 	const tips = [];
 	let match;
 
-	while ((match = tipRegex.exec(tipsText)) !== null) {
+	// Try standard format first
+	while ((match = standardTipRegex.exec(tipsText)) !== null) {
 		const [_, number, context, content] = match;
 		const contentLines = content.trim().split(/\n/);
 		const body = contentLines[0].trim();
@@ -56,41 +63,105 @@ function parseTips(tipsText) {
 			title: `Tip ${number} for ${context}`,
 			body: body,
 			details: details,
-			id: Date.now() + parseInt(number), // Adding unique ID for each tip
+			id: Date.now() + parseInt(number),
 		});
 	}
 
-	// If we couldn't parse tips with the standard format (possible in other languages),
-	// use a more flexible approach by splitting on newlines and looking for patterns
+	// If standard format didn't work, try multilingual format
+	if (tips.length === 0) {
+		while ((match = multilingualTipRegex.exec(tipsText)) !== null) {
+			const [_, tipWord, number, title, content] = match;
+			const contentParts = content.trim().split(/\n\n/);
+			const body = contentParts[0].trim();
+			const details = contentParts.slice(1).join('\n\n').trim();
+
+			tips.push({
+				title: `${tipWord} ${number}: ${title}`,
+				body: body,
+				details: details,
+				id: Date.now() + parseInt(number),
+			});
+		}
+	}
+
+	// If neither regex worked, use a more flexible approach by looking for bold text or numbered items
+	if (tips.length === 0) {
+		// Look for bold text patterns like **Title** or numbered lists like 1. or 1:
+		const sections = tipsText.split(/\n\n+/); // Split by double newlines
+		let currentTipNumber = 1;
+
+		for (let i = 0; i < sections.length; i++) {
+			const section = sections[i].trim();
+
+			// Check if this section looks like a tip title
+			if (
+				/\*\*[^*]+\*\*/.test(section) || // Bold text
+				/^\d+[.:]/.test(section) || // Numbered item
+				/युक्ति|टिप|सुझाव|Tip/.test(section) // Contains tip words
+			) {
+				// This looks like a title, the next section is likely the content
+				if (i + 1 < sections.length) {
+					const title = section.replace(/\*\*/g, '').trim();
+					const contentSection = sections[i + 1].trim();
+					const contentParts = contentSection.split(/\n/);
+
+					tips.push({
+						title: title,
+						body: contentParts[0] || '',
+						details: contentParts.slice(1).join('\n').trim(),
+						id: Date.now() + currentTipNumber,
+					});
+
+					currentTipNumber++;
+					i++; // Skip the next section as we've used it as content
+				}
+			}
+		}
+	}
+
+	// If we still have no tips, use a last-resort approach
 	if (tips.length === 0) {
 		const lines = tipsText.split('\n');
 		let currentTip = null;
+		let tipCount = 0;
 
 		for (const line of lines) {
-			// Look for lines that might be tip titles (contains number + some text)
-			if (/^\s*(\d+)[.:]/.test(line) || /Tip\s+\d+/i.test(line)) {
+			const trimmedLine = line.trim();
+
+			// Skip empty lines
+			if (!trimmedLine) continue;
+
+			// Look for lines that might be tip titles
+			if (
+				/\*\*/.test(trimmedLine) || // Contains asterisks (markdown)
+				/^\d+[.:]/.test(trimmedLine) || // Starts with number and . or :
+				/(युक्ति|टिप|सुझाव|Tip)\s*\d+/.test(trimmedLine) // Contains tip word + number
+			) {
+				// Save previous tip if exists
 				if (currentTip) {
 					tips.push(currentTip);
 				}
+
+				// Start a new tip
+				tipCount++;
 				currentTip = {
-					title: line.trim(),
+					title: trimmedLine.replace(/\*\*/g, ''),
 					body: '',
 					details: '',
-					id: Date.now() + tips.length,
+					id: Date.now() + tipCount,
 				};
-			} else if (currentTip) {
-				// If we have a current tip and this isn't an empty line, add to body or details
-				if (line.trim()) {
-					if (!currentTip.body) {
-						currentTip.body = line.trim();
-					} else {
-						currentTip.details +=
-							(currentTip.details ? '\n' : '') + line.trim();
-					}
+			}
+			// If we have a current tip and this isn't a title, add to body or details
+			else if (currentTip) {
+				if (!currentTip.body) {
+					currentTip.body = trimmedLine;
+				} else {
+					currentTip.details += (currentTip.details ? '\n' : '') + trimmedLine;
 				}
 			}
 		}
 
+		// Add the last tip if it exists
 		if (currentTip) {
 			tips.push(currentTip);
 		}
@@ -153,13 +224,13 @@ app.post('/generate-tips', async (req, res) => {
 		const hasAge = checkForAgeReference(userPrompt);
 
 		// If no age is mentioned, ask for clarification
-		// if (!hasAge) {
-		// 	return res.status(400).json({
-		// 		error: 'age_required',
-		// 		message:
-		// 			"Please specify your child's age to receive more relevant tips.",
-		// 	});
-		// }
+		if (!hasAge) {
+			return res.status(400).json({
+				error: 'age_required',
+				message:
+					"Please specify your child's age to receive more relevant tips.",
+			});
+		}
 
 		// Detect language of the prompt
 		const language = await detectLanguage(userPrompt);
@@ -169,20 +240,25 @@ app.post('/generate-tips', async (req, res) => {
 
 		// Add identified interest to the user prompt if found
 		let enhancedPrompt = userPrompt;
-		// if (childInterest) {
-		// 	enhancedPrompt += `\n\nPlease incorporate my child's interest in ${childInterest} into your tips.`;
-		// }
 
 		// Generate tips using GPT-4o or GPT-4 depending on availability
 		const completion = await openai.chat.completions.create({
 			model: 'gpt-4o', // Use GPT-4 as in the original code
 			messages: [
-				{ role: 'system', content: systemPrompt },
+				{
+					role: 'system',
+					content:
+						systemPrompt +
+						'Reply in the same language as prompt , which is ' +
+						language +
+						'except that Please start every tip title with the word Tip and a number. (this is for regex)',
+				},
 				{ role: 'user', content: enhancedPrompt },
 			],
-			temperature: 0.7,
-			max_tokens: 500,
+			// temperature: 0.7,
+			max_tokens: 800,
 		});
+		console.log(completion.choices);
 		const tipsText = completion.choices[0].message.content;
 
 		// Parse the tips
